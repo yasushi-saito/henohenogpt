@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from importlib.metadata import version
 import logging
+from typing import Optional
 from jaxtyping import Float
 import tiktoken
 import torch
@@ -17,6 +18,7 @@ torch.manual_seed(123)
 DEVICE = (
     torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 )
+logging.info(f"Using {DEVICE} for pytorch")
 
 from torch.utils.data import Dataset, DataLoader
 
@@ -313,18 +315,22 @@ def calc_loss_batch(
     model: GPTModel,
 ) -> float:
     input_batch, target_batch = input_batch.to(DEVICE), target_batch.to(DEVICE)
-    logits = model(input_batch)
+
+    logits = model(input_batch)  # (batch_size, context_length, vocab_size)
     loss = torch.nn.functional.cross_entropy(
         logits.flatten(0, 1), target_batch.flatten()
     )
+    logging.info(f"Calcloss logits={logits.shape} inputogits={input_batch.shape}")
+    logging.info(f"Calcloss logits(flattened)={logits.flatten(0, 1).shape} target={target_batch.flatten().shape}")
     logging.info(
-        f"Calcloss batch: {input_batch.shape} {target_batch.shape} => {loss}"
+        f"Calcloss batch: logits={logits.shape} input={input_batch.shape} =>"
+        f" {loss}"
     )
     return loss
 
 
 def calc_loss_loader(
-    data_loader: DataLoader, model: GPTModel, num_batches: optional[int] = None
+    data_loader: DataLoader, model: GPTModel, num_batches: Optional[int] = None
 ):
     total_loss = 0.0
     if len(data_loader) == 0:
@@ -395,15 +401,15 @@ def train_model_simple(
                     f"Train loss {train_loss:.3f}, Val loss {val_loss:.3f}"
                 )
 
-        generate_and_print_sample(model, tokenizer, DEVICE, start_context)  # G
+        generate_and_print_sample(model, start_context)  # G
     return train_losses, val_losses, track_tokens_seen
 
 
 def create_dataloader_v1(
     txt: str,
-    batch_size=4,
-    max_length=256,
-    stride=128,
+    batch_size,
+    max_length,
+    stride,
     shuffle=True,
     drop_last=True,
     num_workers=0,
@@ -421,6 +427,22 @@ def create_dataloader_v1(
     )
 
     return dataloader
+
+
+def generate_and_print_sample(model, start_context):
+    model.eval()
+    context_size = model.pos_emb.weight.shape[0]
+    encoded = text_to_token_ids(start_context).to(DEVICE)
+    with torch.no_grad():
+        token_ids = generate_text_simple(
+            model=model,
+            idx=encoded,
+            max_new_tokens=50,
+            context_size=context_size,
+        )
+        decoded_text = token_ids_to_text(token_ids)
+        logging.info(decoded_text.replace("\n", " "))  # Compact print format
+    model.train()
 
 
 def main_3():
@@ -472,6 +494,7 @@ def main_3():
         eval_iter=1,
         start_context="Every effort moves you",
     )
+    return
     # txt2 = "Every day holds a"
 
     # batch = []
@@ -491,42 +514,6 @@ def main_3():
     logging.info("Output: {tokenizer.decode(out.squeeze(0).tolist())}")
     total_params = sum(p.numel() for p in model.parameters())
     logging.info(f"Total number of parameters: {total_params:,}")
-
-
-def main_2():
-    tokenizer = tiktoken.get_encoding("gpt2")
-    batch = []
-    txt1 = "Every effort moves you"
-    txt2 = "Every day holds a"
-
-    batch.append(torch.tensor(tokenizer.encode(txt1)))
-    batch.append(torch.tensor(tokenizer.encode(txt2)))
-    batch = torch.stack(batch, dim=0)
-    print(batch.shape)
-    model = DummyGPTModel(Config())
-    logits = model(batch)
-    print(logits.shape)
-
-
-def main_1():
-    dataloader = new_dataloader(
-        "LLMs-from-scratch/appendix-D/01_main-chapter-code/the-verdict.txt"
-    )
-    data_iter = iter(dataloader)
-    inputs, targets = next(data_iter)
-    print(inputs, "=>", targets)
-
-    token_embedding_layer = torch.nn.Embedding(VOCAB_SIZE, OUTPUT_DIM)
-    pos_embedding_layer = torch.nn.Embedding(CONTEXT_LENGTH, OUTPUT_DIM)
-
-    query = inputs[1]
-    attn_scores_2 = torch.empty(inputs.shape[0])
-    print("query=", query, query.shape, inputs.shape, inputs.shape[0])
-
-    for i, x_i in enumerate(inputs):
-        print("Xi=", x_i, torch.dot(x_i, query))
-        attn_scores_2[i] = torch.dot(x_i, query)
-    print("query=", query, attn_scores_2)
 
 
 main_3()
